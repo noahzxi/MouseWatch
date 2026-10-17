@@ -1,0 +1,23 @@
+{
+  "train_fraction": 0.4,
+  "window": 50,
+  "stride": 50,
+  "users_trained": 1697,
+  "users_skipped": 58,
+  "train_windows": 92978,
+  "eval_users": 1697,
+  "eval_genuine_windows": 32443,
+  "eval_impostor_windows": 32443,
+  "genuine_mean_score": 6.086196603801289,
+  "impostor_mean_score": -3.52748520144027,
+  "genuine_median_score": 6.446191033086528,
+  "impostor_median_score": -2.6298123338934936,
+  "threshold": 2.573211597897873,
+  "false_lock_percentile": 5.0,
+  "recheck_seconds": 8.0,
+  "lock_seconds": 25.0,
+  "genuine_accept_rate": 0.7097987239157908,
+  "impostor_accept_rate": 0.3111919366273156,
+  "users_seen": 1755,
+  "rows_loaded": 31990875
+}
