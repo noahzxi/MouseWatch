@@ -133,6 +133,81 @@ class PointerPrintModel:
                 last = score
         return scores, active
 
+    def fine_tune(
+        self,
+        user_id: str,
+        features: np.ndarray,
+        *,
+        max_shift: float = 2.0,
+    ) -> dict[str, float | int | bool | str]:
+        """Update the population model with one user's new windows.
+
+        The shared scaler and every other person stay fixed. A user who is
+        already enrolled moves toward the new windows, but no feature mean can
+        leave the original enrollment mean by more than `max_shift` standardized
+        units. A user who is not enrolled yet is added from these windows.
+        The lock threshold is the low percentile of the latest held-out windows.
+        """
+        if max_shift <= 0:
+            raise ValueError("max_shift must be positive")
+        if features.ndim != 2 or features.shape[1] != len(FEATURE_NAMES):
+            raise ValueError(f"expected features with {len(FEATURE_NAMES)} columns")
+        if features.shape[0] < 3:
+            raise ValueError("fine-tuning needs at least 3 movement windows")
+        label = str(user_id)
+        classifier = self.pipeline.named_steps["clf"]
+        if not hasattr(classifier, "baseline_theta_"):
+            classifier.baseline_theta_ = classifier.theta_.copy()
+        fit_rows, calibration_rows = _split_fit_and_calibration(features)
+        scaled = self.pipeline.named_steps["scale"].transform(fit_rows)
+        mean = scaled.mean(axis=0)
+        variance = np.var(scaled, axis=0)
+        variance = np.maximum(variance, 1e-9) + float(getattr(classifier, "epsilon_", 0.0))
+        added = label not in set(map(str, classifier.classes_.tolist()))
+        if added:
+            self._add_user(label, mean, variance, float(scaled.shape[0]))
+        else:
+            self._update_user(label, mean, variance, float(scaled.shape[0]), max_shift)
+        self.thresholds[label] = owner_threshold(
+            self.score(calibration_rows, label),
+            self.false_lock_percentile,
+        )
+        self.threshold = float(np.median(list(self.thresholds.values())))
+        return {
+            "user_id": label,
+            "windows": int(features.shape[0]),
+            "added": added,
+            "threshold": float(self.thresholds[label]),
+        }
+
+    def _add_user(self, user_id: str, mean: np.ndarray, variance: np.ndarray, count: float) -> None:
+        classifier = self.pipeline.named_steps["clf"]
+        labels = [str(label) for label in classifier.classes_.tolist()]
+        classifier.classes_ = np.asarray(labels + [user_id])
+        classifier.theta_ = np.vstack([classifier.theta_, mean])
+        classifier.var_ = np.vstack([classifier.var_, variance])
+        classifier.class_count_ = np.append(classifier.class_count_, count)
+        classifier.baseline_theta_ = np.vstack([classifier.baseline_theta_, mean])
+        classifier.class_prior_ = np.full(len(classifier.classes_), 1.0 / len(classifier.classes_))
+
+    def _update_user(
+        self,
+        user_id: str,
+        mean: np.ndarray,
+        variance: np.ndarray,
+        count: float,
+        max_shift: float,
+    ) -> None:
+        classifier = self.pipeline.named_steps["clf"]
+        index = self._user_index(user_id)
+        previous = float(classifier.class_count_[index])
+        total = previous + count
+        blended = (previous * classifier.theta_[index] + count * mean) / total
+        baseline = classifier.baseline_theta_[index]
+        classifier.theta_[index] = np.clip(blended, baseline - max_shift, baseline + max_shift)
+        classifier.var_[index] = (previous * classifier.var_[index] + count * variance) / total
+        classifier.class_count_[index] = total
+
     def adapt(self, user_id: str, features: np.ndarray, alpha: float = ADAPT_ALPHA) -> int:
         """Move the enrolled user's mean slightly toward windows that clearly passed.
 
@@ -264,6 +339,22 @@ def paired_scores(
         genuine.append(model.score(windows_by_user[user_id], user_id))
         impostor.append(model.score(windows_by_user[other_id], user_id))
     return np.concatenate(genuine), np.concatenate(impostor)
+
+
+def _split_fit_and_calibration(
+    features: np.ndarray,
+    fraction: float = 0.2,
+    min_fit: int = 3,
+    min_calibration: int = 2,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep the latest windows out of the Gaussian update when there are enough."""
+    count = int(features.shape[0])
+    held_out = int(round(count * fraction))
+    if held_out < min_calibration:
+        held_out = min_calibration
+    if count - held_out < min_fit:
+        return features, features
+    return features[:-held_out], features[-held_out:]
 
 
 def owner_threshold(scores: np.ndarray, percentile: float = FALSE_LOCK_PERCENTILE) -> float:

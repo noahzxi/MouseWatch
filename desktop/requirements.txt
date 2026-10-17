@@ -1,1 +1,2 @@
 # The collector uses the Python standard library only.
+# python -m mousewatch.finetune also needs numpy, scikit-learn, and joblib.

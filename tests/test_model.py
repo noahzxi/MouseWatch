@@ -7,6 +7,7 @@ import pytest
 
 from pointerprint.dataset import split_actions
 from pointerprint.features import FEATURE_NAMES, feature_matrix
+from pointerprint.train import build_user_windows, split_enrollment, train_model
 from pointerprint.model import (
     FEATURE_PENALTY_CAP,
     MAX_MEAN_SHIFT,
@@ -17,7 +18,6 @@ from pointerprint.model import (
     should_lock,
     smooth_scores,
 )
-from pointerprint.train import build_user_windows, split_enrollment, train_model
 from support import two_users
 
 
@@ -187,3 +187,52 @@ def test_paired_scores_reject_a_single_user():
     )
     with pytest.raises(ValueError, match="two users"):
         paired_scores(model, {"owner": np.zeros((2, len(FEATURE_NAMES)))})
+
+
+def _trained() -> PointerPrintModel:
+    model, _metrics = train_model(
+        two_users(),
+        train_fraction=0.4,
+        window=20,
+        stride=20,
+        max_train_windows=None,
+        max_test_windows=None,
+        min_train_windows=1,
+        seed=0,
+    )
+    return model
+
+
+def test_fine_tune_adds_a_new_user_from_their_windows():
+    model = _trained()
+    windows = build_user_windows(
+        two_users(),
+        train_fraction=0.4,
+        window=20,
+        stride=20,
+        max_train_windows=None,
+        max_test_windows=None,
+        min_train_windows=1,
+        seed=0,
+    ).users["owner"].train_x
+    summary = model.fine_tune("7", windows)
+    assert summary["added"] is True
+    assert "7" in set(map(str, model.classes_.tolist()))
+    assert "owner" in set(map(str, model.classes_.tolist()))
+    scores = model.score(windows, "7")
+    assert np.mean(scores >= model.thresholds["7"]) >= 0.9
+
+
+def test_fine_tune_keeps_an_existing_user_near_enrollment():
+    model = _trained()
+    classifier = model.pipeline.named_steps["clf"]
+    index = model._user_index("owner")
+    baseline = classifier.baseline_theta_[index].copy()
+    scaler_mean = model.pipeline.named_steps["scale"].mean_.copy()
+    shifted = np.zeros((12, len(FEATURE_NAMES)))
+    shifted[:, FEATURE_NAMES.index("angle_mean")] = 50
+    summary = model.fine_tune("owner", shifted, max_shift=2.0)
+    assert summary["added"] is False
+    assert np.max(np.abs(classifier.theta_[index] - baseline)) <= 2.0 + 1e-6
+    assert np.max(np.abs(classifier.theta_[index] - baseline)) > 0
+    assert model.pipeline.named_steps["scale"].mean_ == pytest.approx(scaler_mean)

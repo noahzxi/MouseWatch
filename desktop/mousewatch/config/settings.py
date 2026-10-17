@@ -33,6 +33,7 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         description=(
             "Collect background mouse movements and clicks in the dataset.csv format."
         ),
+        epilog="Fine-tune the trained model on a trace with: python -m mousewatch.finetune --user-id ID",
     )
     parser.add_argument(
         "--user-id",

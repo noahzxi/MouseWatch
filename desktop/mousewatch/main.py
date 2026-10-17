@@ -87,6 +87,7 @@ def run(settings: Settings) -> int:
     )
     print(f"MouseWatch is collecting mouse data for user {settings.user_id}.")
     print(f"Writing {settings.output_path}")
+    print("Fine-tune the model on this trace with: python -m mousewatch.finetune --user-id", settings.user_id)
     if settings.enable_tray:
         print("Right-click the tray icon and choose Exit to stop.")
     else:

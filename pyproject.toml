@@ -23,5 +23,5 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src", "tests"]
-testpaths = ["tests"]
+pythonpath = ["src", "tests", "desktop", "shared", "model"]
+testpaths = ["tests", "desktop/tests"]
