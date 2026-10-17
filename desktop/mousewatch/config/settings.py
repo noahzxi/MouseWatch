@@ -25,6 +25,7 @@ class Settings:
     flush_every: int = 50
     flush_seconds: float = 2.0
     enable_tray: bool = True
+    profile_path: Path | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> Settings:
@@ -33,7 +34,10 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         description=(
             "Collect background mouse movements and clicks in the dataset.csv format."
         ),
-        epilog="Fine-tune the trained model on a trace with: python -m mousewatch.finetune --user-id ID",
+        epilog=(
+            "Create the master profile with: python -m mousewatch.finetune --user-id ID --trace TRACE. "
+            "The running app loads master.joblib beside the trace and shows whether the current user matches it."
+        ),
     )
     parser.add_argument(
         "--user-id",
@@ -45,7 +49,7 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         "--output",
         type=Path,
         default=None,
-        help="CSV path. Defaults to %LOCALAPPDATA%\\MouseWatch\\traces.csv.",
+        help="CSV path. Defaults to %%LOCALAPPDATA%%\\MouseWatch\\traces.csv.",
     )
     parser.add_argument(
         "--pause-ms",
@@ -64,6 +68,12 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         type=int,
         default=4,
         help="Drop strokes shorter than this many pixels (default: 4).",
+    )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        default=None,
+        help="Master profile to compare against. Defaults to master.joblib beside the trace.",
     )
     parser.add_argument(
         "--no-tray",
@@ -86,4 +96,5 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         min_distance_px=args.min_distance,
         segment_ms=args.segment_ms,
         enable_tray=not args.no_tray,
+        profile_path=args.profile,
     )

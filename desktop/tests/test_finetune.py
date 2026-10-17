@@ -45,10 +45,12 @@ def test_fine_tune_trace_writes_a_personal_model(tmp_path):
     base = _base_model(tmp_path / "base.joblib")
     trace = tmp_path / "traces.csv"
     _trace(trace)
-    summary = fine_tune_trace(trace, 7, base, tmp_path / "user-7.joblib")
+    summary = fine_tune_trace(trace, 7, base)
     tuned = PointerPrintModel.load(summary["model_path"])
     assert summary["added"] is True
     assert summary["windows"] >= 3
+    assert summary["model_path"].endswith("master.joblib")
+    assert tuned.owner_id == "7"
     assert "7" in set(map(str, tuned.classes_.tolist()))
     assert "owner" in set(map(str, tuned.classes_.tolist()))
     assert "7" in tuned.thresholds

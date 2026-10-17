@@ -21,6 +21,8 @@ from pathlib import Path
 from mousewatch.collector.buffer import MovementAssembler, Record
 from mousewatch.collector.listener import MouseListener, enable_dpi_awareness
 from mousewatch.config.settings import Settings, parse_args
+from mousewatch.display import StatusWindow
+from mousewatch.identity import LiveIdentity, missing_profile_status
 from mousewatch.storage.traces import TraceWriter
 
 kernel32 = ctypes.windll.kernel32
@@ -61,6 +63,24 @@ def _configure_logging(log_path: Path) -> None:
     )
 
 
+def _profile_path(settings: Settings) -> Path:
+    if settings.profile_path is not None:
+        return settings.profile_path
+    return settings.output_path.with_name("master.joblib")
+
+
+def _open_identity(path: Path) -> LiveIdentity | None:
+    if not path.is_file():
+        return None
+    return LiveIdentity.load(path)
+
+
+def _publish(display: StatusWindow | None, listener: MouseListener, status) -> None:
+    if display is not None:
+        display.update(status)
+    listener.set_tip(status.headline)
+
+
 def _apply(assembler: MovementAssembler, event) -> list[Record]:
     kind = event[0]
     if kind == "move":
@@ -85,9 +105,24 @@ def run(settings: Settings) -> int:
     logging.info(
         "collecting user %s to %s", settings.user_id, settings.output_path
     )
+    profile_path = _profile_path(settings)
+    try:
+        identity = _open_identity(profile_path)
+    except (OSError, ValueError, KeyError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
     print(f"MouseWatch is collecting mouse data for user {settings.user_id}.")
     print(f"Writing {settings.output_path}")
-    print("Fine-tune the model on this trace with: python -m mousewatch.finetune --user-id", settings.user_id)
+    if identity is None:
+        print(f"No master profile at {profile_path}.")
+        print(
+            "Create one with: python -m mousewatch.finetune --user-id",
+            settings.user_id,
+            "--trace",
+            settings.output_path,
+        )
+    else:
+        print(f"Comparing movement with master profile {profile_path} (user {identity.owner_id}).")
     if settings.enable_tray:
         print("Right-click the tray icon and choose Exit to stop.")
     else:
@@ -95,6 +130,10 @@ def run(settings: Settings) -> int:
 
     events: queue.SimpleQueue = queue.SimpleQueue()
     listener = MouseListener(events, enable_tray=settings.enable_tray)
+    display = StatusWindow(on_close=listener.request_stop)
+    if not display.start():
+        display = None
+        print("The status window could not be opened. The tray icon still shows the verdict.")
     assembler = MovementAssembler(
         user_id=settings.user_id,
         pause_ns=settings.pause_ms * 1_000_000,
@@ -105,7 +144,21 @@ def run(settings: Settings) -> int:
     writer: TraceWriter | None = None
     try:
         listener.start()
+        opening = (
+            identity.status()
+            if identity is not None
+            else missing_profile_status(profile_path)
+        )
+        _publish(display, listener, opening)
         writer = TraceWriter(settings.output_path, settings.flush_every)
+
+        def publish_records(records: list[Record]) -> None:
+            assert writer is not None
+            for record in records:
+                writer.write(record)
+                if identity is not None:
+                    _publish(display, listener, identity.add(record))
+
         while True:
             timeout = (
                 settings.pause_ms / 1000
@@ -115,14 +168,12 @@ def run(settings: Settings) -> int:
             try:
                 event = events.get(timeout=timeout)
             except queue.Empty:
-                for record in assembler.flush(time.time_ns()):
-                    writer.write(record)
+                publish_records(assembler.flush(time.time_ns()))
                 writer.flush()
                 continue
             if event is None:
                 break
-            for record in _apply(assembler, event):
-                writer.write(record)
+            publish_records(_apply(assembler, event))
     except KeyboardInterrupt:
         logging.info("interrupted")
     except Exception:
@@ -131,6 +182,8 @@ def run(settings: Settings) -> int:
     finally:
         listener.request_stop()
         listener.join(timeout=2)
+        if display is not None:
+            display.close()
         if writer is not None:
             try:
                 while True:

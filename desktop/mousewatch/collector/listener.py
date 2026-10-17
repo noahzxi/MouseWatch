@@ -271,6 +271,10 @@ class MouseListener:
         if self._error is not None:
             raise self._error
 
+    def set_tip(self, text: str) -> None:
+        if self._tray is not None:
+            self._tray.set_tip(text)
+
     def request_stop(self) -> None:
         self._events.put(None)
         thread_id = self._thread_id

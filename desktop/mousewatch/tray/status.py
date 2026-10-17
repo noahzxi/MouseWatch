@@ -9,6 +9,7 @@ user32 = ctypes.windll.user32
 shell32 = ctypes.windll.shell32
 
 NIM_ADD = 0
+NIM_MODIFY = 1
 NIM_DELETE = 2
 NIF_MESSAGE = 0x1
 NIF_ICON = 0x2
@@ -74,6 +75,7 @@ class TrayIcon:
         self._on_exit = on_exit
         self._hwnd: wintypes.HWND | None = None
         self._added = False
+        self._tip = "MouseWatch is collecting mouse data"
         self._icon = user32.LoadIconW(None, IDI_APPLICATION)
 
     def add(self, hwnd) -> bool:
@@ -81,6 +83,13 @@ class TrayIcon:
         nid = self._data(hwnd)
         self._added = bool(shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)))
         return self._added
+
+    def set_tip(self, text: str) -> None:
+        self._tip = text[:127]
+        if not self._added or self._hwnd is None:
+            return
+        nid = self._data(self._hwnd)
+        shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
 
     def remove(self) -> None:
         if not self._added or self._hwnd is None:
@@ -122,5 +131,5 @@ class TrayIcon:
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
         nid.uCallbackMessage = CALLBACK_MESSAGE
         nid.hIcon = self._icon
-        nid.szTip = "MouseWatch is collecting mouse data"
+        nid.szTip = self._tip
         return nid

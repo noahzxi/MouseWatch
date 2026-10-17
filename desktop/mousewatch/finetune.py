@@ -66,7 +66,8 @@ def fine_tune_trace(
         session_gap_seconds=model.session_gap_seconds,
     )
     summary = model.fine_tune(label, windows)
-    destination = Path(output_path) if output_path is not None else trace.with_name(f"user-{label}.joblib")
+    model.owner_id = label
+    destination = Path(output_path) if output_path is not None else trace.with_name("master.joblib")
     model.save(destination)
     summary["model_path"] = str(destination)
     return summary
@@ -94,7 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="Where to write the fine-tuned model. Defaults to user-<id>.joblib next to the trace.",
+        help="Where to write the master profile. Defaults to master.joblib next to the trace.",
     )
     return parser.parse_args(argv)
 

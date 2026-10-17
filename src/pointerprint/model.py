@@ -53,6 +53,7 @@ class PointerPrintModel:
         self.false_lock_percentile = false_lock_percentile
         self.recheck_seconds = recheck_seconds
         self.lock_seconds = lock_seconds
+        self.owner_id: str | None = None
         self.pipeline = Pipeline(
             [
                 ("scale", StandardScaler()),
