@@ -25,7 +25,7 @@ def _base_model(path):
     return path
 
 
-def _trace(path, user_id: int = 7, rows: int = 80) -> None:
+def _trace(path, user_id: int = 7, rows: int = 160) -> None:
     start = 1_700_000_000 * 1_000_000_000
     with TraceWriter(path, flush_every=rows) as writer:
         for index in range(rows):
@@ -51,6 +51,8 @@ def test_fine_tune_trace_writes_a_personal_model(tmp_path):
     assert summary["windows"] >= 3
     assert summary["model_path"].endswith("master.joblib")
     assert tuned.owner_id == "7"
+    assert tuned.personal_template is not None
+    assert tuned.personal_template.limit >= 0
     assert "7" in set(map(str, tuned.classes_.tolist()))
     assert "owner" in set(map(str, tuned.classes_.tolist()))
     assert "7" in tuned.thresholds

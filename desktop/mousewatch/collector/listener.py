@@ -34,7 +34,8 @@ WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
 ERROR_CLASS_ALREADY_EXISTS = 1410
 
-# Button flags in RAWMOUSE.usButtonFlags. The wheel is not a click.
+# Button flags in RAWMOUSE.usButtonFlags. The wheel is recorded separately from clicks.
+RI_MOUSE_WHEEL = 0x0400
 _BUTTONS = (
     (0x0001, 0x0002, "left"),
     (0x0004, 0x0008, "right"),
@@ -217,6 +218,14 @@ def _bind() -> None:
 
 
 _bind()
+
+
+def wheel_notches(flags: int, button_data: int) -> float:
+    """Notches of scroll, positive away from the user. Zero when this packet did not scroll."""
+    if not flags & RI_MOUSE_WHEEL:
+        return 0.0
+    delta = ctypes.c_short(button_data & 0xFFFF).value
+    return delta / 120.0
 
 
 def button_changes(flags: int) -> list[tuple[str, bool]]:
@@ -416,6 +425,9 @@ class MouseListener:
             self._schedule_resample()
         for name, pressed in button_changes(mouse.usButtonFlags):
             self._events.put(("button", name, pressed, when_ns))
+        notches = wheel_notches(mouse.usButtonFlags, mouse.usButtonData)
+        if notches:
+            self._events.put(("wheel", notches, when_ns))
 
     def _emit_cursor(self, when_ns: int) -> bool:
         position = _cursor_position()

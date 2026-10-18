@@ -31,8 +31,9 @@ def _import_pointerprint():
     from pointerprint.dataset import load_actions
     from pointerprint.features import feature_matrix
     from pointerprint.model import PointerPrintModel
+    from pointerprint.personal import PersonalTemplate
 
-    return load_actions, feature_matrix, PointerPrintModel
+    return load_actions, feature_matrix, PointerPrintModel, PersonalTemplate
 
 
 def default_base_model() -> Path:
@@ -46,7 +47,7 @@ def fine_tune_trace(
     output_path: str | Path | None = None,
 ) -> dict[str, float | int | bool | str]:
     """Load `base_model`, update `user_id` from the trace, and save the result."""
-    load_actions, feature_matrix, PointerPrintModel = _import_pointerprint()
+    load_actions, feature_matrix, PointerPrintModel, PersonalTemplate = _import_pointerprint()
     trace = Path(trace_path)
     base = Path(base_model)
     if not trace.is_file():
@@ -67,6 +68,18 @@ def fine_tune_trace(
     )
     summary = model.fine_tune(label, windows)
     model.owner_id = label
+    personal_actions = groups[label]
+    motion = trace.with_name(trace.stem + ".motion.csv")
+    if motion.is_file():
+        from mousewatch.storage.motion import load_motion_actions
+
+        try:
+            rich = load_motion_actions(motion, label)
+        except ValueError:
+            rich = None
+        if rich is not None and rich.shape[0] >= 3:
+            personal_actions = rich
+    model.personal_template = PersonalTemplate.fit(personal_actions)
     destination = Path(output_path) if output_path is not None else trace.with_name("master.joblib")
     model.save(destination)
     summary["model_path"] = str(destination)

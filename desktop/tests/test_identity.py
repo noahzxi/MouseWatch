@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mousewatch.collector.buffer import Record
 from mousewatch.identity import LiveIdentity
+from pointerprint.personal import PersonalTemplate
 from pointerprint.train import train_model
 from support import two_users
 
@@ -66,3 +67,19 @@ def test_live_identity_rejects_a_different_rhythm(tmp_path):
     )
     assert status.verdict == "not_you"
     assert status.headline == "This is not you"
+
+
+def test_personal_template_rejects_after_two_different_windows(tmp_path):
+    path = _model(tmp_path / "master.joblib")
+    identity = LiveIdentity.load(path)
+    identity._template = PersonalTemplate.fit(two_users()["owner"])
+    status = _feed(
+        identity,
+        angle=70,
+        distance=1400,
+        velocity=1800,
+        pause_ms=1400,
+        gap_ns=500_000_000,
+        count=55,
+    )
+    assert status.verdict == "not_you"

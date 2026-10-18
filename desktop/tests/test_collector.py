@@ -81,11 +81,52 @@ class AssemblerTests(unittest.TestCase):
         self.assertTrue(all(record.duration_ms == 10 for record in rows))
         self.assertTrue(all(record.angle is None for record in rows))
 
-    def test_short_movement_is_dropped(self) -> None:
+    def test_short_movement_is_kept_as_jitter(self) -> None:
         assembler = self._assembler()
         assembler.add_move(1, 0, 0)
         assembler.add_move(1, 0, 10_000_000)
-        self.assertEqual(assembler.flush(200_000_000), [])
+        records = assembler.flush(200_000_000)
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].saved)
+        self.assertGreater(records[0].path_px, 0)
+        self.assertEqual(records[0].reversals, 0)
+
+    def test_a_reversal_counts_as_jitter(self) -> None:
+        assembler = self._assembler()
+        assembler.add_move(10, 0, 0)
+        assembler.add_move(-4, 0, 20_000_000)
+        record = assembler.flush(200_000_000)[0]
+        self.assertEqual(record.reversals, 1)
+        self.assertGreater(record.jitter_px, 1)
+        self.assertGreater(record.path_px, record.distance_px)
+
+    def test_a_click_remembers_the_approach_and_the_gap(self) -> None:
+        assembler = self._assembler()
+        assembler.add_move(30, 0, 0)
+        assembler.add_move(10, 0, 100_000_000)
+        press = assembler.add_button("left", True, 150_000_000)
+        self.assertEqual(press[0].distance_px, 10)
+        release = assembler.add_button("left", False, 200_000_000)
+        self.assertGreater(release[0].approach_px_s, 0)
+        self.assertEqual(release[0].button, "left")
+        again = assembler.add_button("left", True, 400_000_000)
+        self.assertEqual(again, [])
+        second = assembler.add_button("left", False, 450_000_000)
+        self.assertEqual(second[0].click_gap_ms, 250)
+
+    def test_movement_while_held_is_a_drag(self) -> None:
+        assembler = self._assembler()
+        assembler.add_button("left", True, 0)
+        assembler.add_move(20, 0, 10_000_000)
+        record = assembler.flush(200_000_000)[0]
+        self.assertTrue(record.drag)
+
+    def test_scroll_is_kept_out_of_the_dataset_row(self) -> None:
+        assembler = self._assembler()
+        record = assembler.add_wheel(1.0, 1_000)[0]
+        self.assertFalse(record.saved)
+        self.assertEqual(record.button, "wheel")
+        self.assertEqual(record.wheel_notches, 1.0)
 
     def test_pause_starts_a_new_movement(self) -> None:
         assembler = self._assembler()
@@ -175,6 +216,13 @@ class ButtonFlagTests(unittest.TestCase):
         self.assertEqual(button_changes(0x0001 | 0x0002), [("left", True), ("left", False)])
         self.assertEqual(button_changes(0x0400), [])
         self.assertEqual(button_changes(0x0004 | 0x0400), [("right", True)])
+
+    def test_wheel_notches_are_signed_detents(self) -> None:
+        from mousewatch.collector.listener import wheel_notches
+
+        self.assertEqual(wheel_notches(0, 120), 0.0)
+        self.assertEqual(wheel_notches(0x0400, 120), 1.0)
+        self.assertEqual(wheel_notches(0x0400, 0xFF88), -1.0)
 
 
 if __name__ == "__main__":

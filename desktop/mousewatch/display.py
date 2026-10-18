@@ -10,6 +10,7 @@ from mousewatch.identity import IdentityStatus
 _COLORS = {
     "you": "#1f8a4c",
     "not_you": "#b42318",
+    "unsure": "#b54708",
     "waiting": "#3f3f46",
 }
 
@@ -44,7 +45,7 @@ class StatusWindow:
 
         root = tk.Tk()
         root.title("MouseWatch")
-        root.geometry("420x150+48+48")
+        root.geometry("440x180+48+48")
         root.resizable(False, False)
         root.attributes("-topmost", True)
         root.configure(bg="white")
@@ -59,13 +60,13 @@ class StatusWindow:
         detail = tk.Label(
             root,
             text="",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 18),
             bg="white",
             fg="#3f3f46",
-            wraplength=380,
-            justify="left",
+            wraplength=400,
+            justify="center",
         )
-        detail.pack(fill="x", padx=18)
+        detail.pack(fill="x", padx=18, pady=(8, 0))
 
         def finish() -> None:
             if self._on_close is not None:

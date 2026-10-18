@@ -17,18 +17,22 @@ def _import_pointerprint():
         entry = str(source)
         if entry not in sys.path:
             sys.path.insert(0, entry)
-    from pointerprint.dataset import ACTION_DTYPE, TICKS_PER_SECOND
+    from pointerprint.dataset import TICKS_PER_SECOND
     from pointerprint.features import MIN_ACTIVE_STROKES, window_features, window_spans
     from pointerprint.model import PointerPrintModel, decide_access
+    from pointerprint.personal import MOTION_DTYPE, match_percent, session_start, verdict_for
 
     return (
-        ACTION_DTYPE,
+        MOTION_DTYPE,
         TICKS_PER_SECOND,
         MIN_ACTIVE_STROKES,
         window_features,
         window_spans,
         PointerPrintModel,
         decide_access,
+        match_percent,
+        session_start,
+        verdict_for,
     )
 
 
@@ -55,7 +59,9 @@ def record_to_action(record: Record, action_dtype, ticks_per_second: int) -> np.
     """One collector row, in the same array layout the trainer scores."""
     action = np.zeros(1, dtype=action_dtype)
     action["t"][0] = int(record.when_ns // (1_000_000_000 // ticks_per_second))
-    if record.duration_ms is None:
+    if record.button == "wheel":
+        action["duration"][0] = np.nan
+    elif record.duration_ms is None:
         action["stroke"][0] = 1
         action["angle"][0] = np.nan if record.angle is None else record.angle
         action["distance"][0] = np.nan if record.distance_px is None else record.distance_px
@@ -63,6 +69,18 @@ def record_to_action(record: Record, action_dtype, ticks_per_second: int) -> np.
         action["duration"][0] = np.nan
     else:
         action["duration"][0] = record.duration_ms
+    if "path" in action.dtype.names:
+        action["path"][0] = record.path_px
+        action["jitter"][0] = record.jitter_px
+        action["reversals"][0] = record.reversals
+        action["samples"][0] = record.samples
+        action["accel"][0] = record.accel
+        action["drag"][0] = float(record.drag)
+        action["button"][0] = {"left": 1, "right": 2, "middle": 3, "wheel": 4}.get(record.button, 0)
+        action["approach"][0] = record.approach_px_s
+        action["slowdown"][0] = record.slowdown
+        action["click_gap"][0] = record.click_gap_ms
+        action["wheel"][0] = record.wheel_notches
     return action
 
 
@@ -78,20 +96,29 @@ class LiveIdentity:
             self._window_spans,
             _model_type,
             self._decide_access,
+            self._match_percent,
+            self._session_start,
+            self._verdict_for,
         ) = _import_pointerprint()
         self.model = model
         self.owner_id = str(owner_id)
-        if self.owner_id not in self.model.thresholds:
+        self._template = getattr(model, "personal_template", None)
+        if self._template is None and self.owner_id not in self.model.thresholds:
             raise KeyError(f"master profile has no threshold for user {self.owner_id}")
         self._actions = np.empty(0, dtype=self._dtype)
         self._scored_spans = 0
         self._scores: list[float] = []
         self._durations: list[float] = []
+        self._penalties: list[float] = []
         self._latest_score: float | None = None
+        self._session_at = 0
+        self._last_scored_length = -1
 
     @classmethod
     def load(cls, path: str | Path) -> LiveIdentity:
-        _dtype, _ticks, _min, _features, _spans, PointerPrintModel, _decide = _import_pointerprint()
+        _dtype, _ticks, _min, _features, _spans, PointerPrintModel, _decide, _match, _start, _verdict = (
+            _import_pointerprint()
+        )
         model = PointerPrintModel.load(path)
         owner = getattr(model, "owner_id", None)
         if not owner:
@@ -101,6 +128,9 @@ class LiveIdentity:
     def add(self, record: Record) -> IdentityStatus:
         action = record_to_action(record, self._dtype, self._ticks_per_second)
         self._actions = np.concatenate([self._actions, action]) if self._actions.size else action
+        if self._template is not None:
+            self._score_slide()
+            return self.status()
         spans = self._window_spans(
             self._actions,
             window=self.model.window,
@@ -114,17 +144,17 @@ class LiveIdentity:
         return self.status()
 
     def status(self) -> IdentityStatus:
-        threshold = float(self.model.thresholds[self.owner_id])
+        needed = self._template.window if self._template is not None else self.model.window
+        if self._template is not None and self._penalties:
+            return self._personal_status()
         if self._latest_score is None:
             return IdentityStatus(
                 verdict="waiting",
                 headline="Need more movement",
-                detail=(
-                    f"{len(self._actions)} of {self.model.window} actions collected "
-                    f"for the next score."
-                ),
+                detail=f"{len(self._actions)} of {needed} actions collected for the next score.",
                 tone="waiting",
             )
+        threshold = float(self.model.thresholds[self.owner_id])
         you = self._latest_score >= threshold
         sustained = self._decide_access(
             np.asarray(self._scores, dtype=np.float64),
@@ -140,6 +170,45 @@ class LiveIdentity:
             detail=f"Score {self._latest_score:.1f}    threshold {threshold:.1f}    {held}",
             tone="you" if you else "not_you",
         )
+
+    def _personal_status(self) -> IdentityStatus:
+        limit = self._template.limit
+        match = self._match_percent(self._smoothed_penalty(), limit)
+        verdict = self._verdict_for(self._penalties, limit)
+        headlines = {
+            "you": "This is you",
+            "not_you": "This is not you",
+            "unsure": "Not sure",
+        }
+        return IdentityStatus(
+            verdict=verdict,
+            headline=headlines[verdict],
+            detail=f"Match {match:.0f}%",
+            tone=verdict,
+        )
+
+    def _smoothed_penalty(self) -> float:
+        recent = self._penalties[-5:]
+        return float(np.median(recent))
+
+    def _score_slide(self) -> None:
+        start = self._session_start(self._actions)
+        if start != self._session_at:
+            self._session_at = start
+            self._last_scored_length = -1
+            self._penalties.clear()
+        tail = self._actions[start:]
+        window = self._template.window
+        if tail.shape[0] < window:
+            return
+        if (tail.shape[0] - window) % self._template.slide != 0:
+            return
+        if tail.shape[0] == self._last_scored_length:
+            return
+        self._last_scored_length = int(tail.shape[0])
+        penalty = self._template.penalty(tail[-window:])
+        if penalty is not None:
+            self._penalties.append(penalty)
 
     def _score_span(self, start: int, end: int) -> None:
         chunk = self._actions[start:end]

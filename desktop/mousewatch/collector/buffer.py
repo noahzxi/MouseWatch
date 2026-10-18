@@ -30,6 +30,18 @@ class Record:
     distance_px: int | None
     velocity_px_s: int | None
     when_ns: int
+    path_px: float = 0.0
+    jitter_px: float = 0.0
+    reversals: int = 0
+    samples: int = 0
+    saved: bool = True
+    accel: float = 0.0
+    drag: bool = False
+    button: str = ""
+    approach_px_s: float = 0.0
+    slowdown: float = 0.0
+    click_gap_ms: float = 0.0
+    wheel_notches: float = 0.0
 
 
 @dataclass
@@ -38,6 +50,16 @@ class _Movement:
     t_last: int
     net_dx: float
     net_dy: float
+    path_px: float = 0.0
+    samples: int = 0
+    reversals: int = 0
+    prev_dx: float = 0.0
+    prev_dy: float = 0.0
+    has_prev: bool = False
+    prev_speed: float = 0.0
+    has_speed: bool = False
+    accel_sum: float = 0.0
+    accel_count: int = 0
 
 
 def direction_angle(dx: float, dy: float) -> int:
@@ -77,6 +99,9 @@ class MovementAssembler:
         self._segment_ns = segment_ns
         self._movement: _Movement | None = None
         self._pressed: dict[str, int] = {}
+        self._recent: list[tuple[int, float, float]] = []
+        self._last_down: dict[str, int] = {}
+        self._press_context: dict[str, tuple[float, float, float]] = {}
 
     @property
     def has_open_movement(self) -> bool:
@@ -96,9 +121,27 @@ class MovementAssembler:
         if self._movement is None:
             self._movement = _Movement(when_ns, when_ns, 0.0, 0.0)
         movement = self._movement
+        dt_s = (when_ns - movement.t_last) / 1_000_000_000 if movement.samples else 0.0
         movement.t_last = when_ns
         movement.net_dx += dx
         movement.net_dy += dy
+        step = math.hypot(dx, dy)
+        movement.path_px += step
+        movement.samples += 1
+        if movement.has_prev and dx * movement.prev_dx + dy * movement.prev_dy < 0:
+            movement.reversals += 1
+        if movement.has_speed and dt_s > 0:
+            speed = step / dt_s
+            movement.accel_sum += abs(speed - movement.prev_speed) / dt_s
+            movement.accel_count += 1
+            movement.prev_speed = speed
+        elif dt_s > 0:
+            movement.prev_speed = step / dt_s
+            movement.has_speed = True
+        movement.prev_dx = dx
+        movement.prev_dy = dy
+        movement.has_prev = True
+        self._remember(dx, dy, when_ns)
         return records
 
     def add_button(self, button: str, pressed: bool, when_ns: int) -> list[Record]:
@@ -106,9 +149,16 @@ class MovementAssembler:
         if pressed:
             if self._movement is not None:
                 records.extend(self._close_movement())
+            gap_ms = 0.0
+            if button in self._last_down:
+                gap_ms = (when_ns - self._last_down[button]) / 1_000_000
+            self._last_down[button] = when_ns
+            approach, slowdown = self._approach(when_ns)
+            self._press_context[button] = (approach, slowdown, gap_ms)
             self._pressed[button] = when_ns
             return records
         started = self._pressed.pop(button, None)
+        approach, slowdown, gap_ms = self._press_context.pop(button, (0.0, 0.0, 0.0))
         if started is None:
             return records
         duration_ms = int(round((when_ns - started) / 1_000_000))
@@ -122,9 +172,29 @@ class MovementAssembler:
                 distance_px=None,
                 velocity_px_s=None,
                 when_ns=when_ns,
+                button=button,
+                approach_px_s=approach,
+                slowdown=slowdown,
+                click_gap_ms=gap_ms,
             )
         )
         return records
+
+    def add_wheel(self, notches: float, when_ns: int) -> list[Record]:
+        """One scroll step. It stays out of the dataset file and in the motion sidecar."""
+        return [
+            Record(
+                user_id=self._user_id,
+                duration_ms=None,
+                angle=None,
+                distance_px=None,
+                velocity_px_s=None,
+                when_ns=when_ns,
+                button="wheel",
+                wheel_notches=notches,
+                saved=False,
+            )
+        ]
 
     def flush(self, now_ns: int, *, force: bool = False) -> list[Record]:
         if self._movement is None:
@@ -139,8 +209,10 @@ class MovementAssembler:
         if movement is None:
             return []
         distance = int(round(math.hypot(movement.net_dx, movement.net_dy)))
-        if distance < self._min_distance:
-            return []
+        net = math.hypot(movement.net_dx, movement.net_dy)
+        jitter = movement.path_px - net
+        if jitter < 0:
+            jitter = 0.0
         dt_ns = movement.t_last - movement.t_first
         if dt_ns < _MIN_DT_NS:
             dt_ns = _MIN_DT_NS
@@ -153,5 +225,38 @@ class MovementAssembler:
                 distance_px=distance,
                 velocity_px_s=velocity,
                 when_ns=movement.t_last,
+                path_px=movement.path_px,
+                jitter_px=jitter,
+                reversals=movement.reversals,
+                samples=movement.samples,
+                saved=distance >= self._min_distance,
+                accel=(movement.accel_sum / movement.accel_count) if movement.accel_count else 0.0,
+                drag=bool(self._pressed),
             )
         ]
+
+    def _remember(self, dx: float, dy: float, when_ns: int) -> None:
+        self._recent.append((when_ns, dx, dy))
+        cutoff = when_ns - 200_000_000
+        while self._recent and self._recent[0][0] < cutoff:
+            self._recent.pop(0)
+
+    def _approach(self, when_ns: int) -> tuple[float, float]:
+        """Speed over the last 200 ms, and how much that speed fell in the second half."""
+        samples = [sample for sample in self._recent if sample[0] >= when_ns - 200_000_000]
+        if len(samples) < 2:
+            return 0.0, 0.0
+
+        def speed(part: list[tuple[int, float, float]]) -> float:
+            if len(part) < 2:
+                return 0.0
+            path = sum(math.hypot(dx, dy) for _when, dx, dy in part)
+            dt_s = (part[-1][0] - part[0][0]) / 1_000_000_000
+            if dt_s <= 0.01:
+                return 0.0
+            return path / dt_s
+
+        mid = len(samples) // 2
+        early = speed(samples[: mid + 1])
+        late = speed(samples[mid:])
+        return speed(samples), early - late

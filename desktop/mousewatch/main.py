@@ -23,6 +23,7 @@ from mousewatch.collector.listener import MouseListener, enable_dpi_awareness
 from mousewatch.config.settings import Settings, parse_args
 from mousewatch.display import StatusWindow
 from mousewatch.identity import LiveIdentity, missing_profile_status
+from mousewatch.storage.motion import MotionWriter, motion_path_for
 from mousewatch.storage.traces import TraceWriter
 
 kernel32 = ctypes.windll.kernel32
@@ -89,6 +90,9 @@ def _apply(assembler: MovementAssembler, event) -> list[Record]:
     if kind == "button":
         _, button, pressed, when_ns = event
         return assembler.add_button(button, pressed, when_ns)
+    if kind == "wheel":
+        _, notches, when_ns = event
+        return assembler.add_wheel(notches, when_ns)
     return []
 
 
@@ -142,6 +146,7 @@ def run(settings: Settings) -> int:
     )
     code = 0
     writer: TraceWriter | None = None
+    motion: MotionWriter | None = None
     try:
         listener.start()
         opening = (
@@ -151,11 +156,14 @@ def run(settings: Settings) -> int:
         )
         _publish(display, listener, opening)
         writer = TraceWriter(settings.output_path, settings.flush_every)
+        motion = MotionWriter(motion_path_for(settings.output_path), settings.flush_every)
 
         def publish_records(records: list[Record]) -> None:
-            assert writer is not None
+            assert writer is not None and motion is not None
             for record in records:
-                writer.write(record)
+                motion.write(record)
+                if record.saved:
+                    writer.write(record)
                 if identity is not None:
                     _publish(display, listener, identity.add(record))
 
@@ -170,6 +178,7 @@ def run(settings: Settings) -> int:
             except queue.Empty:
                 publish_records(assembler.flush(time.time_ns()))
                 writer.flush()
+                motion.flush()
                 continue
             if event is None:
                 break
@@ -191,13 +200,21 @@ def run(settings: Settings) -> int:
                     if event is None:
                         continue
                     for record in _apply(assembler, event):
-                        writer.write(record)
+                        if motion is not None:
+                            motion.write(record)
+                        if record.saved:
+                            writer.write(record)
             except queue.Empty:
                 pass
             for record in assembler.flush(time.time_ns(), force=True):
-                writer.write(record)
+                if motion is not None:
+                    motion.write(record)
+                if record.saved:
+                    writer.write(record)
             rows = writer.rows_written
             writer.close()
+            if motion is not None:
+                motion.close()
             logging.info("stopped after %s rows", rows)
     return code
 
