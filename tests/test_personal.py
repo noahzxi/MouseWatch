@@ -68,3 +68,8 @@ def test_match_percent_is_50_at_the_limit():
     assert match_percent(0, 10) == 100
     assert match_percent(10, 10) == 50
     assert match_percent(40, 10) < 50
+
+
+def test_match_stays_high_near_the_user_and_falls_past_the_limit():
+    assert match_percent(2.5, limit=6.0, typical=2.5) > 80
+    assert match_percent(12.0, limit=6.0, typical=2.5) < 20

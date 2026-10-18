@@ -20,7 +20,7 @@ def _import_pointerprint():
     from pointerprint.dataset import TICKS_PER_SECOND
     from pointerprint.features import MIN_ACTIVE_STROKES, window_features, window_spans
     from pointerprint.model import PointerPrintModel, decide_access
-    from pointerprint.personal import MOTION_DTYPE, match_percent, session_start, verdict_for
+    from pointerprint.personal import MOTION_DTYPE, SMOOTH_WINDOWS, match_percent, session_start, verdict_for
 
     return (
         MOTION_DTYPE,
@@ -33,6 +33,7 @@ def _import_pointerprint():
         match_percent,
         session_start,
         verdict_for,
+        SMOOTH_WINDOWS,
     )
 
 
@@ -99,6 +100,7 @@ class LiveIdentity:
             self._match_percent,
             self._session_start,
             self._verdict_for,
+            self._smooth_windows,
         ) = _import_pointerprint()
         self.model = model
         self.owner_id = str(owner_id)
@@ -116,7 +118,7 @@ class LiveIdentity:
 
     @classmethod
     def load(cls, path: str | Path) -> LiveIdentity:
-        _dtype, _ticks, _min, _features, _spans, PointerPrintModel, _decide, _match, _start, _verdict = (
+        _dtype, _ticks, _min, _features, _spans, PointerPrintModel, _decide, _match, _start, _verdict, _smooth = (
             _import_pointerprint()
         )
         model = PointerPrintModel.load(path)
@@ -173,8 +175,9 @@ class LiveIdentity:
 
     def _personal_status(self) -> IdentityStatus:
         limit = self._template.limit
-        match = self._match_percent(self._smoothed_penalty(), limit)
-        verdict = self._verdict_for(self._penalties, limit)
+        typical = getattr(self._template, "typical", None)
+        match = self._match_percent(self._smoothed_penalty(), limit, typical)
+        verdict = self._verdict_for(self._penalties, limit, typical)
         headlines = {
             "you": "This is you",
             "not_you": "This is not you",
@@ -188,7 +191,7 @@ class LiveIdentity:
         )
 
     def _smoothed_penalty(self) -> float:
-        recent = self._penalties[-5:]
+        recent = self._penalties[-self._smooth_windows :]
         return float(np.median(recent))
 
     def _score_slide(self) -> None:
