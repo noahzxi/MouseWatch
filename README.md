@@ -165,6 +165,7 @@ The template needs at least 3 windows. About five minutes of the same aim drill 
 | `models/aim-master.joblib` | Personal profile for user `100000`, built from the five-minute aim recording. |
 | `desktop/old/traces.csv` | That recording, 23:52–23:57 on 2026-10-17, user `100000`. |
 | `desktop/old/traces.motion.csv` | Motion sidecar for the same recording. |
+| `data/6681.csv` | Browsing trace for user `6681`, 02:28–02:52 on 2026-10-18. Same seven columns as the dataset CSV. It is a recording, not a fine-tuned profile. |
 
 A fine-tune with `--output master.joblib` writes `desktop/master.joblib` on this machine. That file is local. The copy stored in the repo is `models/aim-master.joblib`.
 
@@ -289,6 +290,7 @@ python -m pytest tests desktop/tests -q
 | `desktop/MouseWatch.bat` | Starts the collector with no arguments, through `pythonw`. |
 | `models` | Population model, its metrics, and the saved aim profile. |
 | `desktop/old` | The five-minute user `100000` recording and its sidecar. |
+| `data/6681.csv` | A browsing trace for user `6681`. |
 | `model`, `shared` | Unused package stubs. The collector and the live check do not import them. |
 
 ## Limits
