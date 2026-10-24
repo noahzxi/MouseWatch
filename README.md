@@ -6,6 +6,8 @@ The running check does not lock the workstation. `desktop/mousewatch/lock/workst
 
 The public dataset is [Mousetrack](https://data.mendeley.com/datasets/3rfsbcmgfw/1) (Mendeley, 1,755 users, 31,990,875 actions). The population model in this repo was trained on that file. The live aim-drill check was tuned on a five-minute Human Benchmark aim recording from one desktop user.
 
+[Watch a quick demo!](https://www.youtube.com/watch?v=pH1crN75Nss}
+
 ## Quick start
 
 From a new PowerShell window, score live movement against the saved five-minute aim profile for user `100000`:
